@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,12 @@ import (
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+func EmbedThumbnail(inData thumbnail) string {
+	// convert the raw image data to an embedable html data element
+	dat := base64.StdEncoding.EncodeToString(inData.data)
+	return fmt.Sprintf("data:%s;base64,%s", inData.mediaType, dat)
+}
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
@@ -68,8 +75,13 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	thumb := thumbnail{data: imageData, mediaType: fileMime}
 	videoThumbnails[videoID] = thumb
-	thumbnailURL := fmt.Sprintf("http://localhost:%v/api/thumbnails/%v", cfg.port, videoID)
+	thumbnailURL := EmbedThumbnail(thumb)
 	dbVideo.ThumbnailURL = &thumbnailURL
-	cfg.db.UpdateVideo(dbVideo)
+	err = cfg.db.UpdateVideo(dbVideo)
+	if err != nil {
+		log.Println("handlerUploadThumbnail() unable to add thumbnail to database", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to write thumbnail to database", err)
+		return
+	}
 	respondWithJSON(w, http.StatusOK, struct{}{})
 }
