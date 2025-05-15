@@ -1,20 +1,60 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
 
-func EmbedThumbnail(inData thumbnail) string {
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+func EmbedThumbnail(inData thumbnail) string { // DEPRECATED
 	// convert the raw image data to an embedable html data element
 	dat := base64.StdEncoding.EncodeToString(inData.data)
 	return fmt.Sprintf("data:%s;base64,%s", inData.mediaType, dat)
+}
+
+func (cfg *apiConfig) saveFileToDisc(videoId uuid.UUID, inData thumbnail, fileExtension string) error {
+	dest := fmt.Sprintf("%s%s", videoId, fileExtension)
+	dest = filepath.Join(cfg.assetsRoot, dest)
+	exits, err := exists(dest)
+	if err != nil {
+		return err
+	}
+	if exits {
+		// we are about to overwrite!
+		return errors.New("destination file already exists")
+	}
+	fp, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(fp, bytes.NewReader(inData.data))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +95,17 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer formFile.Close()
-	fileMime := formFileHeader.Header.Get("Content-Type")
+	fileMime, _, err := mime.ParseMediaType(formFileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		log.Println("handlerUploadThumbnail() error getting mime type", err)
+		respondWithError(w, http.StatusInternalServerError, "error determining mime type", err)
+		return
+	}
+	if !slices.Contains([]string{}, fileMime) {
+		log.Println("handlerUploadThumbnail() incorrect mime type:", fileMime)
+		respondWithError(w, http.StatusBadRequest, "Incorrect file type provided", fmt.Errorf("%s is not valid type", fileMime))
+		return
+	}
 	imageData, err := io.ReadAll(formFile)
 	if err != nil {
 		log.Println("handlerUploadThumbnail() error getting data", err)
@@ -73,9 +123,21 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "not allowed", nil)
 		return
 	}
+	fileExtension, err := mime.ExtensionsByType(fileMime)
+	if err != nil {
+		log.Println("handlerUploadThumbnail() unable to determine mime extension", err)
+		respondWithError(w, http.StatusInternalServerError, "unable to determine file extension", err)
+		return
+	}
 	thumb := thumbnail{data: imageData, mediaType: fileMime}
 	videoThumbnails[videoID] = thumb
-	thumbnailURL := EmbedThumbnail(thumb)
+	err = cfg.saveFileToDisc(videoID, thumb, fileExtension[0])
+	if err != nil {
+		log.Println("handlerUploadThumbnail() unable to save file to disc", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to save file to disc", err)
+		return
+	}
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s%s", cfg.port, videoID, fileExtension[0])
 	dbVideo.ThumbnailURL = &thumbnailURL
 	err = cfg.db.UpdateVideo(dbVideo)
 	if err != nil {
