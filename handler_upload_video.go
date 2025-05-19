@@ -1,9 +1,102 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"log"
+	"mime"
 	"net/http"
+	"os"
+	"slices"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/google/uuid"
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
+	// 1 Gb of memory
+	const maxMemory = 10 << 30
+	r.Body = http.MaxBytesReader(w, r.Body, maxMemory)
 
+	videoIDString := r.PathValue("videoID")
+	videoID, err := uuid.Parse(videoIDString)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid ID", err)
+		return
+	}
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT", err)
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
+		return
+	}
+	log.Println("handlerUploadVideo() uploading thumbnail for video", videoID, "by user", userID)
+	err = r.ParseMultipartForm(maxMemory)
+	if err != nil {
+		log.Println("handlerUploadVideo() error parsing multipart form", err)
+		respondWithError(w, http.StatusInternalServerError, "error parsing multipart form", err)
+		return
+	}
+	dbVideo, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		log.Println("handlerUploadVideo() unable to find video in database", err)
+		respondWithError(w, http.StatusNotFound, "error getting video", err)
+		return
+	}
+	formFile, formFileHeader, err := r.FormFile("video")
+	if err != nil {
+		log.Println("handlerUploadVideo() error getting video", err)
+		respondWithError(w, http.StatusInternalServerError, "error getting video", err)
+		return
+	}
+	defer formFile.Close()
+	fileMime, _, err := mime.ParseMediaType(formFileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		log.Println("handlerUploadVideo() error getting mime type", err)
+		respondWithError(w, http.StatusInternalServerError, "error determining mime type", err)
+		return
+	}
+	if !slices.Contains([]string{"video/mp4"}, fileMime) {
+		log.Println("handlerUploadVideo() incorrect mime type:", fileMime)
+		respondWithError(w, http.StatusBadRequest, "Incorrect file type provided", fmt.Errorf("%s is not valid type", fileMime))
+		return
+	}
+	// Temp file for uploading to S3
+	tmpFile, err := os.CreateTemp("", "tubely-upload-*.mp4")
+	if err != nil {
+		log.Println("handlerUploadVideo() Failed to create a temp file of the upload", err)
+		respondWithError(w, http.StatusInternalServerError, "unable to create a temp file", err)
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+	_, err = io.Copy(tmpFile, formFile)
+	if err != nil {
+		log.Println("handlerUploadVideo() Failed to copy data from stream to temp file", err)
+		respondWithError(w, http.StatusInternalServerError, "unable to copy into temp file", err)
+		return
+	}
+	// reset to start
+	tmpFile.Seek(0, io.SeekStart)
+	destName := getThumbName(".mp4")
+	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{Bucket: &cfg.s3Bucket, Key: &destName, Body: tmpFile, ContentType: &fileMime})
+	if err != nil {
+		log.Println("handlerUploadVideo() Unable to upload file", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to push to s3", err)
+		return
+	}
+	newURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, destName)
+	dbVideo.VideoURL = &newURL
+	err = cfg.db.UpdateVideo(dbVideo)
+	if err != nil {
+		log.Println("handlerUploadVideo() Error updating video record", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to write video to database", err)
+		return
+	}
+	respondWithJSON(w, http.StatusOK, struct{}{})
 }

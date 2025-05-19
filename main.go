@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 
@@ -21,6 +25,7 @@ type apiConfig struct {
 	s3Bucket         string
 	s3Region         string
 	s3CfDistribution string
+	s3Client         *s3.Client
 	port             string
 }
 
@@ -30,6 +35,19 @@ type thumbnail struct {
 }
 
 var videoThumbnails = map[uuid.UUID]thumbnail{}
+
+func (cfg *apiConfig) initS3() error {
+	tmpCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(cfg.s3Region))
+	if err != nil {
+		return err
+	}
+	client := s3.NewFromConfig(tmpCfg)
+	if client == nil {
+		return fmt.Errorf("failed to initialize s3 client")
+	}
+	cfg.s3Client = client
+	return nil
+}
 
 func main() {
 	godotenv.Load(".env")
@@ -94,6 +112,11 @@ func main() {
 		s3Region:         s3Region,
 		s3CfDistribution: s3CfDistribution,
 		port:             port,
+	}
+
+	err = cfg.initS3()
+	if err != nil {
+		log.Fatalf("Couldn't initialize s3 client %v", err)
 	}
 
 	err = cfg.ensureAssetsDir()
