@@ -81,9 +81,16 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "unable to copy into temp file", err)
 		return
 	}
+	aspect, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+		log.Println("handlerUploadVideo() failed to get video aspect ratio", err)
+		respondWithError(w, http.StatusInternalServerError, "unable to get aspect ratio from temp file", err)
+		return
+	}
 	// reset to start
 	tmpFile.Seek(0, io.SeekStart)
-	destName := getThumbName(".mp4")
+
+	destName := fmt.Sprintf("%s/%s", aspect, getThumbName(".mp4"))
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{Bucket: &cfg.s3Bucket, Key: &destName, Body: tmpFile, ContentType: &fileMime})
 	if err != nil {
 		log.Println("handlerUploadVideo() Unable to upload file", err)
