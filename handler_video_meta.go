@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os/exec"
@@ -90,18 +91,18 @@ type ffprobeJSON struct {
 	} `json:"streams"`
 }
 
-// greatestCommonDivisor calculates the greatest common divisor (GCD) of two integers.
-func greatestCommonDivisor(a, b int) int {
-	for b != 0 {
-		a, b = b, a%b
+func processVideoForFastStart(filePath string) (string, error) {
+	var stdBuffer, errBuffer bytes.Buffer
+	outputPath := fmt.Sprintf("%s.processing", filePath)
+	outCMD := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputPath)
+	outCMD.Stdout = &stdBuffer
+	outCMD.Stderr = &errBuffer
+	err := outCMD.Run()
+	if err != nil {
+		log.Println("processVideoForFastStart() error updating mov attom of file", filePath, "error", errBuffer.String())
+		return "", err
 	}
-	return a
-}
-
-// calculateAspectRatio calculates the aspect ratio of given width and height.
-func calculateAspectRatio(width, height int) (int, int) {
-	gcd := greatestCommonDivisor(width, height)
-	return width / gcd, height / gcd
+	return outputPath, nil
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {

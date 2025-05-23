@@ -74,7 +74,6 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
 	_, err = io.Copy(tmpFile, formFile)
 	if err != nil {
 		log.Println("handlerUploadVideo() Failed to copy data from stream to temp file", err)
@@ -89,7 +88,25 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 	// reset to start
 	tmpFile.Seek(0, io.SeekStart)
-
+	processedFileName, err := processVideoForFastStart(tmpFile.Name())
+	if err != nil {
+		log.Println("handlerUploadVideo() unable to process temp video", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to process video", err)
+		return
+	}
+	err = tmpFile.Close()
+	if err != nil {
+		log.Println("handlerUploadVideo() unable to close temp file pointer, please investigate", err)
+		log.Println("Continueing...")
+	}
+	tmpFile, err = os.Open(processedFileName)
+	if err != nil {
+		log.Println("handlerUploadVideo() unable to open processed file", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to open process video", err)
+		return
+	}
+	defer tmpFile.Close()
+	defer os.Remove(processedFileName)
 	destName := fmt.Sprintf("%s/%s", aspect, getThumbName(".mp4"))
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{Bucket: &cfg.s3Bucket, Key: &destName, Body: tmpFile, ContentType: &fileMime})
 	if err != nil {
