@@ -216,7 +216,14 @@ func (cfg *apiConfig) handlerVideoGet(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusNotFound, "Couldn't get video", err)
 		return
 	}
-
+	if video.VideoURL != nil {
+		// get presigned url
+		video, err = cfg.dbVideoToSignedVideo(video)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Couldn't generate video URL", err)
+			return
+		}
+	}
 	respondWithJSON(w, http.StatusOK, video)
 }
 
@@ -237,6 +244,17 @@ func (cfg *apiConfig) handlerVideosRetrieve(w http.ResponseWriter, r *http.Reque
 		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve videos", err)
 		return
 	}
-
+	// update URLs
+	for idx, elm := range videos {
+		if elm.VideoURL == nil || len(*elm.VideoURL) == 0 {
+			continue
+		}
+		vid, err := cfg.dbVideoToSignedVideo(elm)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Unable to generate URL", err)
+			return
+		}
+		videos[idx] = vid
+	}
 	respondWithJSON(w, http.StatusOK, videos)
 }
